@@ -217,55 +217,36 @@ class SearchVM : ViewModel(), KoinComponent {
                         maxVisibility = VisibilityLevel.SearchOnly,
                         includeTypes = listOf("app"),
                     )
-                } else {
-                    flowOf(emptyList())
-                }
-                val allApps = searchService.getAllApps()
+                } else flowOf(emptyList())
 
-                allApps
+                searchService.getAllApps()
                     .combine(hiddenItemKeys) { results, hiddenKeys -> results to hiddenKeys }
                     .collectLatest { (results, hiddenKeys) ->
-                        val hiddenItems = mutableListOf<SavableSearchable>()
-
-                        val (hiddenApps, apps) = results.standardProfileApps.partition {
-                            hiddenKeys.contains(
-                                it.key
-                            )
-                        }
-                        hiddenItems += hiddenApps
-
-                        val (hiddenWorkApps, workApps) = results.workProfileApps.partition {
-                            hiddenKeys.contains(
-                                it.key
-                            )
-                        }
-                        hiddenItems += hiddenWorkApps
-
-                        val (hiddenPrivateApps, privateApps) = results.privateSpaceApps.partition {
-                            hiddenKeys.contains(
-                                it.key
-                            )
-                        }
-                        hiddenItems += hiddenPrivateApps
-                        previousResults = SearchResults(apps = apps)
-
                         searchActionResults.clear()
-                        appResults.mergeWith(apps)
-                        workAppResults.mergeWith(workApps)
-                        privateSpaceAppResults.mergeWith(privateApps)
-                        hiddenResults.mergeWith(hiddenItems)
-                    }
 
-            } else {
-                val hiddenItemKeys = if (!filters.hiddenItems) searchableRepository.getKeys(
-                    maxVisibility = VisibilityLevel.Hidden,
-                ) else flowOf(emptyList())
+                        PartitionerScope(hiddenKeys) {
+                            val apps = results.standardProfileApps.removeHidden()
+                            previousResults = SearchResults(apps = apps)
+
+                            appResults.mergeWith(apps)
+                            workAppResults.mergeWith(results.workProfileApps.removeHidden())
+                            privateSpaceAppResults.mergeWith(results.privateSpaceApps.removeHidden())
+
+                            hiddenResults.mergeWith(hidden())
+                        }
+                    }
+            } else /* query.isEmpty() */ {
+                val hiddenItemKeys = if (!filters.hiddenItems) {
+                    searchableRepository.getKeys(
+                        maxVisibility = VisibilityLevel.Hidden,
+                    )
+                } else flowOf(emptyList())
+
                 searchService.search(
                     query,
                     filters = if (query.isEmpty()) filters.copy(apps = true) else filters,
                     previousResults,
-                )
-                    .combine(hiddenItemKeys) { results, hiddenKeys -> results to hiddenKeys }
+                ).combine(hiddenItemKeys) { results, hiddenKeys -> results to hiddenKeys }
                     .collectLatest { (results, hiddenKeys) ->
                         previousResults = results
 
@@ -429,7 +410,7 @@ class SearchVM : ViewModel(), KoinComponent {
         return sorted.distinctBy { it.key }.toList()
     }
 
-    private fun <T> SnapshotStateList<T>.mergeWith(newItems: List<T>?) {
+    private fun <T> SnapshotStateList<T>.diffMerge(newItems: List<T>?) {
         val items = newItems ?: emptyList()
         val diff = toSet() subtract items.toSet()
         removeAll(diff)
@@ -444,7 +425,26 @@ class SearchVM : ViewModel(), KoinComponent {
         newItems: List<T>?,
         hiddenKeys: List<String>,
         query: String
-    ) = this.mergeWith((newItems ?: emptyList()).filterNot { hiddenKeys.contains(it.key) }.applyRanking(query))
+    ) = this.diffMerge((newItems ?: emptyList()).filterNot { hiddenKeys.contains(it.key) }.applyRanking(query))
+
+    private class PartitionerReceiver(val hiddenKeys: List<String>) {
+        private val hiddenItems = mutableListOf<Application>()
+        fun List<Application>.removeHidden(): List<Application> {
+            val (hidden, notHidden) = this.partition { hiddenKeys.contains(it.key) }
+            hiddenItems += hidden
+            return notHidden
+        }
+        fun hidden(): List<Application> = hiddenItems.toList()
+    }
+    private fun PartitionerScope(val hiddenKeys: List<String>, block: PartitionerReceiver.() -> Unit)
+        = PartitionerReceiver(hiddenKeys).block()
+
+    private class MergeReceiver(val hiddenKeys: List<String>, val query: String) {
+        suspend fun <T : SavableSearchable> SnapshotStateList<T>.mergeWith(other: List<T>?) {
+            val eaaa = other?.filterNot { hiddenKeys.contains(it.key) } ?: emptyList()
+            eaaa.applyRanking(query)
+        }
+    }
 }
 
 
