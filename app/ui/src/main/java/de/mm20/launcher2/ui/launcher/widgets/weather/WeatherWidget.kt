@@ -86,11 +86,15 @@ import java.text.SimpleDateFormat
 import kotlin.math.roundToInt
 import androidx.core.net.toUri
 import de.mm20.launcher2.ktx.flattenedIndices
+import de.mm20.launcher2.ktx.firstIndexThatMinimizes
 import de.mm20.launcher2.ui.ktx.animateScrollToItem
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
+import java.time.Instant
+import java.time.ZoneId
+import kotlin.math.abs
 import kotlin.math.min
 
 @Composable
@@ -109,11 +113,20 @@ fun WeatherWidget(widget: WeatherWidget) {
 
     var selectedDayIndex by viewModel.selectedDayIndex
     var absoluteSelectedForecastIndex by viewModel.absoluteSelectedForecastIndex
-
     val forecasts = viewModel.forecasts
+
     val hourlyState by remember {
         derivedStateOf {
             forecasts.map { it.hourlyForecasts }.let { it.flatten() to it.flattenedIndices() }
+        }
+    }
+    val hoursOfForecasts by remember {
+        derivedStateOf {
+            forecasts.map {
+                it.hourlyForecasts.map {
+                    Instant.ofEpochMilli(it.timestamp).atZone(ZoneId.of("UTC")).hour
+                }
+            }
         }
     }
     val (hourlyForecasts, hourlyForecastsIndices) = hourlyState
@@ -232,7 +245,7 @@ fun WeatherWidget(widget: WeatherWidget) {
                     )
                     viewModel.forecasts.getOrNull(selectedDayIndex)?.let {
                         WeatherDaySelector(
-                            days = viewModel.forecasts,
+                            days = forecasts,
                             selectedDay = it,
                             onDaySelected = {
                                 if (it == selectedDayIndex) {
@@ -240,8 +253,13 @@ fun WeatherWidget(widget: WeatherWidget) {
                                 }
                                 val relativeIndex =
                                     absoluteSelectedForecastIndex - hourlyForecastsIndices[selectedDayIndex].start
+                                val selectedHour = hoursOfForecasts[selectedDayIndex][relativeIndex]
+
                                 val (lo, hi) = hourlyForecastsIndices[it].let { it.start to it.endInclusive }
-                                absoluteSelectedForecastIndex = min(lo + relativeIndex, hi)
+                                val nextRelativeHourIndex = hoursOfForecasts[it]
+                                    .firstIndexThatMinimizes { abs(it - selectedHour) }
+
+                                absoluteSelectedForecastIndex = min(lo + nextRelativeHourIndex, hi)
                                 selectedDayIndex = it
                                 coroutineScope.launch {
                                     timeListState.animateScrollToItem(absoluteSelectedForecastIndex, programmaticScroll = programmaticScrollState)

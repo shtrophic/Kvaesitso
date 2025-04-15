@@ -39,3 +39,16 @@ fun <T> List<List<T>>.flattenedIndices(): List<IntRange> {
     }
     return indexList
 }
+
+fun <T, V: Comparable<V>> List<T>.firstIndexThatMinimizes(predicate: (T) -> V): Int {
+    var min: V? = null
+    var idx = -1
+    forEachIndexed { i, t ->
+        val v = predicate(t)
+        if (min == null || v < min) {
+            min = v
+            idx = i
+        }
+    }
+    return idx
+}
