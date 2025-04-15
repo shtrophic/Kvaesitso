@@ -92,8 +92,6 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
-import java.time.Instant
-import java.time.ZoneId
 import kotlin.math.abs
 import kotlin.math.min
 
@@ -122,11 +120,7 @@ fun WeatherWidget(widget: WeatherWidget) {
     }
     val hoursOfForecasts by remember {
         derivedStateOf {
-            forecasts.map {
-                it.hourlyForecasts.map {
-                    Instant.ofEpochMilli(it.timestamp).atZone(ZoneId.of("UTC")).hour
-                }
-            }
+            forecasts.map { it.hourlyForecasts.map { it.getHour() } }
         }
     }
     val (hourlyForecasts, hourlyForecastsIndices) = hourlyState
@@ -285,7 +279,7 @@ fun CurrentWeather(forecast: Forecast, imperialUnits: Boolean) {
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             val latLonRegexp =
-                remember { Regex("^\\d{1,2}°\\d{1,2}'[NS] \\d{1,3}°\\d{1,2}'[EW]\$") }
+                remember { Regex("^\\d{1,2}°\\d{1,2}'[NS] \\d{1,3}°\\d{1,2}'[EW]$") }
             val isLatLon = latLonRegexp.matches(forecast.location)
             Row(
                 modifier = Modifier
@@ -479,7 +473,7 @@ fun WeatherTimeSelector(
                     .graphicsLayer {
                         alpha = listState.layoutInfo.blendIntoViewScale(idx, 2f)
                     },
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(backgroundAlpha)
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(backgroundAlpha),
             ) {
                 Column(
                     modifier = Modifier

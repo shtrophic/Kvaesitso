@@ -22,6 +22,8 @@ import de.mm20.launcher2.weather.Forecast.Companion.STORM
 import de.mm20.launcher2.weather.Forecast.Companion.THUNDERSTORM
 import de.mm20.launcher2.weather.Forecast.Companion.THUNDERSTORM_WITH_RAIN
 import de.mm20.launcher2.weather.Forecast.Companion.WIND
+import java.time.Instant
+import java.time.ZoneId
 
 data class Forecast(
         val timestamp: Long,
@@ -132,4 +134,7 @@ data class Forecast(
         const val WIND = 18
         const val BROKEN_CLOUDS = 19
     }
+
+    fun getHour(zoneId: ZoneId = ZoneId.of("UTC")) =
+        Instant.ofEpochMilli(timestamp).atZone(zoneId).hour
 }
