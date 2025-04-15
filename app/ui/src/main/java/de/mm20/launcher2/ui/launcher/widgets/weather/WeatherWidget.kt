@@ -2,7 +2,6 @@ package de.mm20.launcher2.ui.launcher.widgets.weather
 
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.text.format.DateUtils
 import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.animation.AnimatedVisibility
@@ -18,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -32,7 +32,7 @@ import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.North
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Divider
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -41,10 +41,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
@@ -80,10 +84,19 @@ import java.text.DateFormat
 import java.text.DecimalFormat
 import java.text.SimpleDateFormat
 import kotlin.math.roundToInt
+import androidx.core.net.toUri
+import de.mm20.launcher2.ktx.flattenedIndices
+import de.mm20.launcher2.ui.ktx.animateScrollToItem
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.launch
+import kotlin.math.min
 
 @Composable
 fun WeatherWidget(widget: WeatherWidget) {
     val viewModel: WeatherWidgetVM = viewModel(key = "weather-widget-${widget.id}")
+    val coroutineScope = rememberCoroutineScope()
 
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -94,7 +107,16 @@ fun WeatherWidget(widget: WeatherWidget) {
         }
     }
 
-    val selectedForecast by viewModel.currentForecast
+    var selectedDayIndex by viewModel.selectedDayIndex
+    var absoluteSelectedForecastIndex by viewModel.absoluteSelectedForecastIndex
+
+    val forecasts = viewModel.forecasts
+    val hourlyState by remember {
+        derivedStateOf {
+            forecasts.map { it.hourlyForecasts }.let { it.flatten() to it.flattenedIndices() }
+        }
+    }
+    val (hourlyForecasts, hourlyForecastsIndices) = hourlyState
 
     val imperialUnits by viewModel.imperialUnits.collectAsState(false)
     val compactMode = !widget.config.showForecast
@@ -106,7 +128,6 @@ fun WeatherWidget(widget: WeatherWidget) {
     if (showLocationDialog) {
         WeatherLocationSearchDialog(onDismissRequest = { showLocationDialog = false })
     }
-
 
     Column {
         if (!isProviderAvailable) {
@@ -132,7 +153,7 @@ fun WeatherWidget(widget: WeatherWidget) {
             )
         }
 
-        val forecast = selectedForecast ?: run {
+        val forecast = hourlyForecasts.getOrNull(absoluteSelectedForecastIndex) ?: run {
             val hasPermission by viewModel.hasLocationPermission.collectAsState()
             val autoLocation by viewModel.autoLocation.collectAsState()
             AnimatedVisibility(hasPermission == false && autoLocation == true) {
@@ -159,14 +180,27 @@ fun WeatherWidget(widget: WeatherWidget) {
             return
         }
 
-
         CurrentWeather(forecast, imperialUnits)
 
         if (!compactMode) {
-
-            val dailyForecasts by viewModel.dailyForecasts
-            val selectedDayForecast by viewModel.currentDailyForecast
-            val currentDayForecasts by viewModel.currentDayForecasts
+            val timeListState = rememberLazyListState()
+            val dayListState = rememberLazyListState()
+            val programmaticScrollState = remember { mutableStateOf(false) }
+            val programmaticScroll by programmaticScrollState
+            val firstVisibleDayIndex by remember {
+                derivedStateOf {
+                    hourlyForecastsIndices.indexOfFirst { timeListState.firstVisibleItemIndex in it }
+                }
+            }
+            LaunchedEffect(firstVisibleDayIndex) {
+                snapshotFlow { firstVisibleDayIndex }
+                    .distinctUntilChanged()
+                    .filter { !programmaticScroll }
+                    .collectLatest {
+                        selectedDayIndex = it
+                        dayListState.animateScrollToItem(it, programmaticScroll = programmaticScrollState)
+                    }
+            }
 
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = LocalCardStyle.current.opacity),
@@ -176,26 +210,45 @@ fun WeatherWidget(widget: WeatherWidget) {
                     modifier = Modifier.padding(top = 8.dp, bottom = 12.dp)
                 ) {
                     WeatherTimeSelector(
-                        forecasts = currentDayForecasts,
-                        selectedForecast = forecast,
+                        hourlyForecasts = hourlyForecasts,
+                        selectedForecastIndex = absoluteSelectedForecastIndex,
                         imperialUnits = imperialUnits,
-                        onTimeSelected = {
-                            viewModel.selectForecast(it)
+                        onTimeSelected = { timeIdx ->
+                            if (absoluteSelectedForecastIndex == timeIdx) {
+                                return@WeatherTimeSelector
+                            }
+                            absoluteSelectedForecastIndex = timeIdx
+                            selectedDayIndex = hourlyForecastsIndices.indexOfFirst { timeIdx in it }
+                            coroutineScope.launch {
+                                dayListState.animateScrollToItem(selectedDayIndex, programmaticScroll = programmaticScrollState)
+                            }
                         },
+                        listState = timeListState,
                         modifier = Modifier.padding(bottom = 8.dp)
                     )
-                    Divider(
+                    HorizontalDivider(
                         modifier = Modifier.padding(horizontal = 16.dp),
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f),
                     )
-                    selectedDayForecast?.let {
+                    viewModel.forecasts.getOrNull(selectedDayIndex)?.let {
                         WeatherDaySelector(
-                            days = dailyForecasts,
+                            days = viewModel.forecasts,
                             selectedDay = it,
                             onDaySelected = {
-                                viewModel.selectDay(it)
+                                if (it == selectedDayIndex) {
+                                    return@WeatherDaySelector
+                                }
+                                val relativeIndex =
+                                    absoluteSelectedForecastIndex - hourlyForecastsIndices[selectedDayIndex].start
+                                val (lo, hi) = hourlyForecastsIndices[it].let { it.start to it.endInclusive }
+                                absoluteSelectedForecastIndex = min(lo + relativeIndex, hi)
+                                selectedDayIndex = it
+                                coroutineScope.launch {
+                                    timeListState.animateScrollToItem(absoluteSelectedForecastIndex, programmaticScroll = programmaticScrollState)
+                                }
                             },
                             imperialUnits = imperialUnits,
+                            listState = dayListState,
                             modifier = Modifier.padding(top = 8.dp)
                         )
                     }
@@ -254,8 +307,7 @@ fun CurrentWeather(forecast: Forecast, imperialUnits: Boolean) {
                         modifier = Modifier
                             .clickable(onClick = {
                                 val intent = Intent(Intent.ACTION_VIEW).apply {
-                                    data = Uri.parse(forecast.providerUrl)
-                                        ?: return@clickable
+                                    data = forecast.providerUrl.toUri()
                                 }
                                 context.tryStartActivity(intent)
                             })
@@ -384,14 +436,13 @@ fun CurrentWeather(forecast: Forecast, imperialUnits: Boolean) {
 @Composable
 fun WeatherTimeSelector(
     modifier: Modifier = Modifier,
-    forecasts: List<Forecast>,
-    selectedForecast: Forecast,
+    hourlyForecasts: List<Forecast>,
+    selectedForecastIndex: Int,
     imperialUnits: Boolean,
-    onTimeSelected: (Int) -> Unit
+    onTimeSelected: (Int) -> Unit,
+    listState: LazyListState
 ) {
     val dateFormat = remember { DateFormat.getTimeInstance(DateFormat.SHORT) }
-
-    val listState = rememberLazyListState()
     LazyRow(
         state = listState,
         modifier = modifier
@@ -401,8 +452,8 @@ fun WeatherTimeSelector(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        itemsIndexed(forecasts, key = { idx, _ -> idx }) { idx, fc ->
-            val backgroundAlpha = if (fc == selectedForecast) 0.2f else 0.0f
+        itemsIndexed(hourlyForecasts, key = { idx, _ -> idx }) { idx, fc ->
+            val backgroundAlpha = if (idx == selectedForecastIndex) 0.2f else 0.0f
             Surface(
                 shape = MaterialTheme.shapes.extraSmall,
                 modifier = Modifier
@@ -448,14 +499,13 @@ fun WeatherTimeSelector(
 @Composable
 fun WeatherDaySelector(
     modifier: Modifier = Modifier,
-    days: List<DailyForecast>,
+    days: SnapshotStateList<DailyForecast>,
     selectedDay: DailyForecast,
     onDaySelected: (Int) -> Unit,
-    imperialUnits: Boolean
+    imperialUnits: Boolean,
+    listState: LazyListState
 ) {
     val dateFormat = SimpleDateFormat("EEE")
-
-    val listState = rememberLazyListState()
     LazyRow(
         state = listState,
         modifier = modifier
@@ -467,7 +517,6 @@ fun WeatherDaySelector(
     ) {
         itemsIndexed(days, key = { idx, _ -> idx }) { idx, day ->
             val backgroundAlpha = if (day == selectedDay) 0.2f else 0.0f
-
             Surface(
                 modifier = Modifier.graphicsLayer {
                     alpha = listState.layoutInfo.blendIntoViewScale(idx, 0.5f)

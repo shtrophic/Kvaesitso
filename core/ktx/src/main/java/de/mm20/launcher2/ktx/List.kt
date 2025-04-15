@@ -27,3 +27,15 @@ fun <T> List<T>.distinctByEquality(equalityPredicate: (T, T) -> Boolean): List<T
 
     return ret
 }
+
+fun <T> List<List<T>>.flattenedIndices(): List<IntRange> {
+    val indexList = mutableListOf<IntRange>()
+    var lastEnd: Int? = null
+    for (sublist in this) {
+        val start = lastEnd?.let { it + 1 } ?: 0
+        val end = start + sublist.lastIndex
+        indexList.add(start..end)
+        lastEnd = end
+    }
+    return indexList
+}
